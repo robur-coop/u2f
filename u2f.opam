@@ -1,0 +1,28 @@
+opam-version: "2.0"
+homepage: "https://github.com/roburio/u2f"
+dev-repo: "git+https://github.com/roburio/u2f.git"
+bug-reports: "https://github.com/roburio/u2f/issues"
+maintainer: [ "robur team" ]
+authors: [ "robur team" ]
+license: "undecided"
+
+build: [
+  ["dune" "subst"] {dev}
+  ["dune" "build" "-p" name "-j" jobs]
+  ["dune" "runtest" "-p" name "-j" jobs] {with-test}
+]
+
+depends: [
+  "dream" {dev}
+  "ppx_blob" {dev}
+  "cmdliner" {dev}
+  "logs" {dev}
+  "lwt" {dev}
+  "yojson"
+  "ppx_deriving_yojson"
+  "mirage-crypto-ec"
+  "x509"
+  "base64"
+]
+
+synopsis: "U2F implementation in OCaml"

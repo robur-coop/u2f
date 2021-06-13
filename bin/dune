@@ -1,0 +1,7 @@
+(executable
+ (public_name u2f_demo)
+ (name u2f_app)
+ (modules u2f_app template)
+ (preprocessor_deps u2f-api-1.1.js)
+ (preprocess (pps ppx_blob))
+ (libraries u2f dream cmdliner logs.cli lwt))
