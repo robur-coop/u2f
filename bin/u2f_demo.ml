@@ -27,7 +27,13 @@ let add_routes t =
     retrieve_form req >>= fun data ->
     let token = List.assoc "token" data in
     let user = List.assoc "username" data in
-    let challenge = Hashtbl.find challenges user in
+    let challenge =
+      match Hashtbl.find_opt challenges user with
+      | Some x -> x
+      | None ->
+        Logs.warn (fun m -> m "no challenge found, using empty");
+        ""
+    in
     match U2f.register_response t challenge token with
     | Ok (key, kh, cert) ->
       Logs.app (fun m -> m "registered %s" user);
@@ -46,7 +52,13 @@ let add_routes t =
 
   let authenticate req =
     let user = Dream.param "user" req in
-    let (_, kh, _) = Hashtbl.find users user in
+    let kh =
+      match Hashtbl.find_opt users user with
+      | Some (_, kh, _) -> kh
+      | None ->
+        Logs.warn (fun m -> m "no user found, using empty key handle");
+        ""
+    in
     let challenge, ar = U2f.authentication_request t kh in
     Hashtbl.replace challenges user challenge;
     Dream.html (Template.authenticate_view ar user)
@@ -55,9 +67,21 @@ let add_routes t =
   let authenticate_finish req =
     retrieve_form req >>= fun data ->
     let user = List.assoc "username" data in
-    let challenge = Hashtbl.find challenges user in
+    let challenge =
+      match Hashtbl.find_opt challenges user with
+      | Some c -> c
+      | None ->
+        Logs.warn (fun m -> m "no challenge found, using empty");
+        ""
+    in
     Hashtbl.remove challenges user;
-    let key, kh, _ = Hashtbl.find users user in
+    let key, kh =
+      match Hashtbl.find_opt users user with
+      | Some (key, kh, _) -> key, kh
+      | None ->
+        Logs.warn (fun m -> m "no user found, using empty");
+        snd (Mirage_crypto_ec.P256.Dsa.generate ()), ""
+    in
     let token = List.assoc "token" data in
     match U2f.authentication_response t key kh challenge token with
     | Ok (_user_present, _counter) ->
