@@ -7,8 +7,21 @@ let page s b =
       <script>%s</script>
      </head><body>%s</body></html>|} s b
 
-let overview_note note ?(user = "user") users challenges =
-  let links =
+let overview notes ?user authenticated_as users challenges =
+  let logged_in =
+    match user with
+    | None -> ""
+    | Some user ->
+      Printf.sprintf
+        {|<h2>Logged in as %s</h2>
+<form action="/logout" method="post"><input type="submit" value="Log out"/></form>
+|} user
+  and authenticated_as =
+    match authenticated_as with
+    | None -> "<p>Not authenticated</p>"
+    | Some user -> Printf.sprintf "<p>Authenticated as %s</p>" user
+  and links =
+    let user = Option.value ~default:"user" user in
     Printf.sprintf
       {|<h2>Links</h2><ul>
 <li><a href="/register">register</a></li>
@@ -28,10 +41,7 @@ let overview_note note ?(user = "user") users challenges =
            (Printf.sprintf "<li>%s (%s)</li>" name challenge) :: acc)
          challenges [] @ [ "</ul>" ])
   in
-  page "" (String.concat "" [note;links;users;challenges])
-
-let overview users challenges =
-  overview_note "" users challenges
+  page "" (String.concat "" (notes @ [logged_in; authenticated_as;links;users;challenges]))
 
 let register_view data user =
   let script = Printf.sprintf {|

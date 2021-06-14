@@ -12,8 +12,11 @@ let retrieve_form request =
 let to_string err = Format.asprintf "%a" U2f.pp_error err
 
 let add_routes t =
-  let main _req =
-    Dream.html (Template.overview users challenges)
+  let main req =
+    let user = Dream.session "user" req in
+    let authenticated_as = Dream.session "authenticated_as" req in
+    let flash = Flash_message.get_flash req |> List.map snd in
+    Dream.html (Template.overview flash ?user authenticated_as users challenges)
   in
 
   let register _req =
@@ -39,15 +42,14 @@ let add_routes t =
       Logs.app (fun m -> m "registered %s" user);
       Hashtbl.replace users user (key, kh, cert);
       Hashtbl.remove challenges user;
-      Dream.html
-        (Template.overview_note "Successfully registered"
-           ~user users challenges)
+      Dream.put_session "user" user req >>= fun () ->
+      Flash_message.put_flash "" "Successfully registered!" req;
+      Dream.redirect req "/"
     | Error e ->
       Logs.warn (fun m -> m "error %a" U2f.pp_error e);
       let err = to_string e in
-      Dream.html
-        (Template.overview_note ("Registration failed " ^ err)
-           ~user users challenges)
+      Flash_message.put_flash "" ("Registration failed " ^ err) req;
+      Dream.redirect req "/"
   in
 
   let authenticate req =
@@ -86,14 +88,20 @@ let add_routes t =
     match U2f.authentication_response t key kh challenge token with
     | Ok (_user_present, _counter) ->
       Hashtbl.remove challenges user;
-      Dream.html (Template.overview_note "Successfully authenticated"
-                    ~user users challenges)
+      Flash_message.put_flash ""  "Successfully authenticated" req;
+      Dream.put_session "user" user req >>= fun () ->
+      Dream.put_session "authenticated_as" user req >>= fun () ->
+      Dream.redirect req "/"
     | Error e ->
       Logs.warn (fun m -> m "error %a" U2f.pp_error e);
       let err = to_string e in
-      Dream.html
-        (Template.overview_note ("Authentication failure: " ^ err)
-           ~user users challenges)
+      Flash_message.put_flash "" ("Authentication failure: " ^ err) req;
+      Dream.redirect req "/"
+  in
+
+  let logout req =
+    Dream.invalidate_session req >>= fun () ->
+    Dream.redirect req "/"
   in
 
   let u2f_api _req =
@@ -107,6 +115,7 @@ let add_routes t =
     Dream.post "/register_finish" register_finish;
     Dream.get "/authenticate/:user" authenticate;
     Dream.post "/authenticate_finish" authenticate_finish;
+    Dream.post "/logout" logout;
     Dream.get "/static/u2f-api-1.1.js" u2f_api;
   ]
 
@@ -117,6 +126,8 @@ let setup_app level port host https =
   Dream.initialize_log ?level ();
   Dream.run ~port ~interface:host ~https
   @@ Dream.logger
+  @@ Dream.memory_sessions
+  @@ Flash_message.flash_messages
   @@ add_routes u2f
   @@ Dream.not_found
 
