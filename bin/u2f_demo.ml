@@ -2,8 +2,6 @@ open Lwt.Infix
 
 let users = Hashtbl.create 7
 
-let challenges = Hashtbl.create 7
-
 let retrieve_form request =
   Dream.body request >|= fun body ->
   let form = Dream__pure.Formats.from_form_urlencoded body in
@@ -16,87 +14,106 @@ let add_routes t =
     let user = Dream.session "user" req in
     let authenticated_as = Dream.session "authenticated_as" req in
     let flash = Flash_message.get_flash req |> List.map snd in
-    Dream.html (Template.overview flash ?user authenticated_as users challenges)
+    Dream.html (Template.overview flash ?user authenticated_as users)
   in
 
-  let register _req =
-    let random_user = Base64.(encode_string ~pad:false ~alphabet:uri_safe_alphabet (Cstruct.to_string (Mirage_crypto_rng.generate 10))) in
-    let challenge, rr = U2f.register_request t in
-    Hashtbl.replace challenges random_user challenge;
-    Dream.html (Template.register_view rr random_user)
+  let register req =
+    let user =
+      match Dream.session "user" req with
+      | None ->
+        Base64.(encode_string ~pad:false ~alphabet:uri_safe_alphabet
+          (Cstruct.to_string (Mirage_crypto_rng.generate 8)))
+      | Some username -> username
+    in
+    let key_handles = match Hashtbl.find_opt users user with
+      | None -> []
+      | Some keys -> List.map (fun (_, kh, _) -> kh) keys
+    in
+    let challenge, rr = U2f.register_request ~key_handles t in
+    Dream.put_session "challenge" challenge req >>= fun () ->
+    Dream.html (Template.register_view rr user)
   in
 
   let register_finish req =
     retrieve_form req >>= fun data ->
     let token = List.assoc "token" data in
     let user = List.assoc "username" data in
-    let challenge =
-      match Hashtbl.find_opt challenges user with
-      | Some x -> x
-      | None ->
-        Logs.warn (fun m -> m "no challenge found, using empty");
-        ""
-    in
-    match U2f.register_response t challenge token with
-    | Ok (key, kh, cert) ->
-      Logs.app (fun m -> m "registered %s" user);
-      Hashtbl.replace users user (key, kh, cert);
-      Hashtbl.remove challenges user;
-      Dream.put_session "user" user req >>= fun () ->
-      Flash_message.put_flash "" "Successfully registered!" req;
-      Dream.redirect req "/"
-    | Error e ->
-      Logs.warn (fun m -> m "error %a" U2f.pp_error e);
-      let err = to_string e in
-      Flash_message.put_flash "" ("Registration failed " ^ err) req;
-      Dream.redirect req "/"
+    match Dream.session "challenge" req with
+    | None ->
+      Logs.warn (fun m -> m "no challenge found");
+      Dream.respond ~status:`Bad_Request "Bad request."
+    | Some challenge ->
+      match U2f.register_response t challenge token with
+      | Error e ->
+        Logs.warn (fun m -> m "error %a" U2f.pp_error e);
+        let err = to_string e in
+        Flash_message.put_flash "" ("Registration failed " ^ err) req;
+        Dream.redirect req "/"
+      | Ok (key, kh, cert) ->
+        match Dream.session "user" req, Hashtbl.find_opt users user with
+        | _, None ->
+          Logs.app (fun m -> m "registered %s" user);
+          Hashtbl.replace users user [ (key, kh, cert) ];
+          Dream.invalidate_session req >>= fun () ->
+          Dream.put_session "user" user req >>= fun () ->
+          Flash_message.put_flash "" "Successfully registered!" req;
+          Dream.redirect req "/"
+        | Some session_user, Some keys ->
+          if String.equal user session_user then begin
+            Logs.app (fun m -> m "registered %s" user);
+            Hashtbl.replace users user ((key, kh, cert) :: keys) ;
+            Dream.invalidate_session req >>= fun () ->
+            Dream.put_session "user" user req >>= fun () ->
+            Flash_message.put_flash "" "Successfully registered!" req;
+            Dream.redirect req "/"
+          end else
+            Dream.respond ~status:`Forbidden "Forbidden."
+        | None, Some _keys ->
+          Dream.respond ~status:`Forbidden "Forbidden."
   in
 
   let authenticate req =
     let user = Dream.param "user" req in
-    let kh =
-      match Hashtbl.find_opt users user with
-      | Some (_, kh, _) ->  [ kh ]
-      | None ->
-        Logs.warn (fun m -> m "no user found, using empty key handle");
-        []
-    in
-    let challenge, ar = U2f.authentication_request t kh in
-    Hashtbl.replace challenges user challenge;
-    Dream.html (Template.authenticate_view ar user)
+    match Hashtbl.find_opt users user with
+    | None ->
+      Logs.warn (fun m -> m "no user found");
+      Dream.respond ~status:`Bad_Request "Bad request."
+    | Some keys ->
+      let khs = List.map (fun (_, kh, _) -> kh) keys in
+      let challenge, ar = U2f.authentication_request t khs in
+      Dream.put_session "challenge" challenge req >>= fun () ->
+      Dream.put_session "challenge_user" user req >>= fun () ->
+      Dream.html (Template.authenticate_view ar user)
   in
 
   let authenticate_finish req =
     retrieve_form req >>= fun data ->
-    let user = List.assoc "username" data in
-    let challenge =
-      match Hashtbl.find_opt challenges user with
-      | Some c -> c
+    match Dream.session "challenge_user" req with
+    | None -> Dream.respond ~status:`Internal_Server_Error "Internal server error."
+    | Some user ->
+      match Dream.session "challenge" req with
       | None ->
-        Logs.warn (fun m -> m "no challenge found, using empty");
-        ""
-    in
-    Hashtbl.remove challenges user;
-    let key, kh =
-      match Hashtbl.find_opt users user with
-      | Some (key, kh, _) -> key, kh
-      | None ->
-        Logs.warn (fun m -> m "no user found, using empty");
-        snd (Mirage_crypto_ec.P256.Dsa.generate ()), ""
-    in
-    let token = List.assoc "token" data in
-    match U2f.authentication_response t [ kh, key ] challenge token with
-    | Ok (_key_handle, _user_present, _counter) ->
-      Hashtbl.remove challenges user;
-      Flash_message.put_flash ""  "Successfully authenticated" req;
-      Dream.put_session "user" user req >>= fun () ->
-      Dream.put_session "authenticated_as" user req >>= fun () ->
-      Dream.redirect req "/"
-    | Error e ->
-      Logs.warn (fun m -> m "error %a" U2f.pp_error e);
-      let err = to_string e in
-      Flash_message.put_flash "" ("Authentication failure: " ^ err) req;
-      Dream.redirect req "/"
+        Logs.warn (fun m -> m "no challenge found");
+        Dream.respond ~status:`Bad_Request "Bad request."
+      | Some challenge ->
+        match Hashtbl.find_opt users user with
+        | None ->
+          Logs.warn (fun m -> m "no user found, using empty");
+          Dream.respond ~status:`Bad_Request "Bad request."
+        | Some keys ->
+          let kh_keys = List.map (fun (key, kh, _) -> kh, key) keys in
+          let token = List.assoc "token" data in
+          match U2f.authentication_response t kh_keys challenge token with
+          | Ok (_key_handle, _user_present, _counter) ->
+            Flash_message.put_flash ""  "Successfully authenticated" req;
+            Dream.put_session "user" user req >>= fun () ->
+            Dream.put_session "authenticated_as" user req >>= fun () ->
+            Dream.redirect req "/"
+          | Error e ->
+            Logs.warn (fun m -> m "error %a" U2f.pp_error e);
+            let err = to_string e in
+            Flash_message.put_flash "" ("Authentication failure: " ^ err) req;
+            Dream.redirect req "/"
   in
 
   let logout req =
