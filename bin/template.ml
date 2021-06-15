@@ -7,7 +7,7 @@ let page s b =
       <script>%s</script>
      </head><body>%s</body></html>|} s b
 
-let overview notes ?user authenticated_as users =
+let overview notes authenticated_as users =
   let authenticated_as =
     match authenticated_as with
     | None -> "<h2>Not authenticated</h2>"
@@ -15,19 +15,16 @@ let overview notes ?user authenticated_as users =
 <form action="/logout" method="post"><input type="submit" value="Log out"/></form>
 |} user
   and links =
-    let user = Option.value ~default:"user" user in
-    Printf.sprintf
-      {|<h2>Links</h2><ul>
+    {|<h2>Register</h2><ul>
 <li><a href="/register">register</a></li>
-<li><a href="/authenticate/%s">authenticate as %s</a></li>
 </ul>
-|} user user
+|}
   and users =
     String.concat ""
       ("<h2>Users</h2><ul>" ::
        Hashtbl.fold (fun name keys acc ->
            let handles = List.map (fun (_, h, _) -> h) keys in
-           (Printf.sprintf "<li>%s (%s)</li>" name (String.concat ", " handles)) :: acc)
+           (Printf.sprintf "<li>%s [<a href=/authenticate/%s>authenticate</a>] (%s)</li>" name name (String.concat ", " handles)) :: acc)
          users [] @ [ "</ul>" ])
   in
   page "" (String.concat "" (notes @ [authenticated_as;links;users]))

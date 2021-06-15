@@ -11,15 +11,14 @@ let to_string err = Format.asprintf "%a" U2f.pp_error err
 
 let add_routes t =
   let main req =
-    let user = Dream.session "user" req in
     let authenticated_as = Dream.session "authenticated_as" req in
     let flash = Flash_message.get_flash req |> List.map snd in
-    Dream.html (Template.overview flash ?user authenticated_as users)
+    Dream.html (Template.overview flash authenticated_as users)
   in
 
   let register req =
     let user =
-      match Dream.session "user" req with
+      match Dream.session "authenticated_as" req with
       | None ->
         Base64.(encode_string ~pad:false ~alphabet:uri_safe_alphabet
           (Cstruct.to_string (Mirage_crypto_rng.generate 8)))
@@ -50,21 +49,23 @@ let add_routes t =
         Flash_message.put_flash "" ("Registration failed " ^ err) req;
         Dream.redirect req "/"
       | Ok (key, kh, cert) ->
-        match Dream.session "user" req, Hashtbl.find_opt users user with
+        match Dream.session "authenticated_as" req, Hashtbl.find_opt users user with
         | _, None ->
           Logs.app (fun m -> m "registered %s" user);
           Hashtbl.replace users user [ (key, kh, cert) ];
           Dream.invalidate_session req >>= fun () ->
-          Dream.put_session "user" user req >>= fun () ->
-          Flash_message.put_flash "" "Successfully registered!" req;
+          Flash_message.put_flash ""
+            (Printf.sprintf "Successfully registered as %s! <a href=\"/authenticate/%s\">[authenticate]</a>" user user)
+            req;
           Dream.redirect req "/"
         | Some session_user, Some keys ->
           if String.equal user session_user then begin
             Logs.app (fun m -> m "registered %s" user);
             Hashtbl.replace users user ((key, kh, cert) :: keys) ;
             Dream.invalidate_session req >>= fun () ->
-            Dream.put_session "user" user req >>= fun () ->
-            Flash_message.put_flash "" "Successfully registered!" req;
+            Flash_message.put_flash ""
+              (Printf.sprintf "Successfully registered as %s! <a href=\"/authenticate/%s\">[authenticate]</a>" user user)
+              req;
             Dream.redirect req "/"
           end else
             Dream.respond ~status:`Forbidden "Forbidden."
