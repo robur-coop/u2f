@@ -1,11 +1,10 @@
-let version = "U2F_V2"
-
 type t = {
   version : string ;
   application_id : string ;
 }
 
-let create application_id = { version ; application_id }
+let create application_id =
+  { version = "U2F_V2" ; application_id }
 
 type protocol_error =
   [ `Other_error | `Bad_request | `Configuration_unsupported
@@ -29,7 +28,7 @@ type error = [
   | `Version_mismatch of string * string
   | `Typ_mismatch of string * string
   | `Challenge_mismatch of string * string
-  | `Key_handle_mismatch of string * string
+  | `Unknown_key_handle of string
   | `Signature_verification of string
 ]
 
@@ -53,9 +52,8 @@ let pp_error ppf = function
   | `Challenge_mismatch (expected, received) ->
     Format.fprintf ppf "challenge mismatch, expected %S, received %S"
       expected received
-  | `Key_handle_mismatch (expected, received) ->
-    Format.fprintf ppf "key handle mismatch, expected %S, received %S"
-      expected received
+  | `Unknown_key_handle received ->
+    Format.fprintf ppf "unknown key handle %S" received
   | `Signature_verification msg ->
     Format.fprintf ppf "signature verification failed %s" msg
 
@@ -92,13 +90,13 @@ let challenge () =
   let random = Cstruct.to_string (Mirage_crypto_rng.generate 32) in
   b64_enc random
 
-let register_request { version ; application_id } =
+let register_request ?(key_handles = []) { version ; application_id } =
   let challenge = challenge () in
   let reg_req = {
     appId = application_id ;
     registerRequests = [ { version ; challenge } ] ;
-    registeredKeys = [] }
-  in
+    registeredKeys = List.map (fun keyHandle -> { version ; keyHandle }) key_handles
+  } in
   challenge,
   Yojson.Safe.to_string (u2f_register_request_to_yojson reg_req)
 
@@ -249,13 +247,13 @@ type u2f_authentication_request = {
   registeredKeys : registered_key list ;
 } [@@deriving yojson]
 
-let authentication_request { version ; application_id } keyHandle =
+let authentication_request { version ; application_id } key_handles =
   let challenge = challenge () in
   let ar = {
     appId = application_id ;
     challenge ;
-    registeredKeys = [ { version ; keyHandle } ] }
-  in
+    registeredKeys = List.map (fun keyHandle -> { version ; keyHandle }) key_handles
+  } in
   challenge,
   Yojson.Safe.to_string (u2f_authentication_request_to_yojson ar)
 
@@ -275,25 +273,26 @@ let decode_sigdata data =
   let signature = Cstruct.shift cs 5 in
   Ok (user_presence, counter, signature)
 
-let authentication_response (t : t) key key_handle challenge data =
+let authentication_response (t : t) key_handle_keys challenge data =
   of_json "AuthenticationResponse"
     u2f_authentication_response_of_yojson data >>= fun sig_resp ->
   lift_err (fun p -> `Protocol p)
     (error_code_of_int sig_resp.errorCode) >>= fun () ->
-  guard (String.equal sig_resp.keyHandle key_handle)
-    (`Key_handle_mismatch (key_handle, sig_resp.keyHandle)) >>= fun () ->
-  b64_dec "clientData" sig_resp.clientData >>= fun client_data_json ->
-  b64_dec "signatureData" sig_resp.signatureData >>= fun sigdata ->
-  lift_err
-    (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
-    (decode_sigdata sigdata) >>= fun (user_present, counter, signature) ->
-  of_json "clientData"
-    clientData_of_yojson client_data_json >>= fun client_data ->
-  guard (res_typ client_data.typ = Ok `Sign)
-    (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
-  guard (String.equal challenge client_data.challenge)
-    (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
-  verify_auth_sig key t.application_id user_present counter
-    client_data_json signature >>= fun () ->
-  Ok (user_present, counter)
+  match List.assoc_opt sig_resp.keyHandle key_handle_keys with
+  | None -> Error (`Unknown_key_handle sig_resp.keyHandle)
+  | Some pubkey ->
+    b64_dec "clientData" sig_resp.clientData >>= fun client_data_json ->
+    b64_dec "signatureData" sig_resp.signatureData >>= fun sigdata ->
+    lift_err
+      (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
+      (decode_sigdata sigdata) >>= fun (user_present, counter, signature) ->
+    of_json "clientData"
+      clientData_of_yojson client_data_json >>= fun client_data ->
+    guard (res_typ client_data.typ = Ok `Sign)
+      (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
+    guard (String.equal challenge client_data.challenge)
+      (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
+    verify_auth_sig pubkey t.application_id user_present counter
+      client_data_json signature >>= fun () ->
+    Ok (sig_resp.keyHandle, user_present, counter)
 

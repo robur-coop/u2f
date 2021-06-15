@@ -56,10 +56,10 @@ let add_routes t =
     let user = Dream.param "user" req in
     let kh =
       match Hashtbl.find_opt users user with
-      | Some (_, kh, _) -> kh
+      | Some (_, kh, _) ->  [ kh ]
       | None ->
         Logs.warn (fun m -> m "no user found, using empty key handle");
-        ""
+        []
     in
     let challenge, ar = U2f.authentication_request t kh in
     Hashtbl.replace challenges user challenge;
@@ -85,8 +85,8 @@ let add_routes t =
         snd (Mirage_crypto_ec.P256.Dsa.generate ()), ""
     in
     let token = List.assoc "token" data in
-    match U2f.authentication_response t key kh challenge token with
-    | Ok (_user_present, _counter) ->
+    match U2f.authentication_response t [ kh, key ] challenge token with
+    | Ok (_key_handle, _user_present, _counter) ->
       Hashtbl.remove challenges user;
       Flash_message.put_flash ""  "Successfully authenticated" req;
       Dream.put_session "user" user req >>= fun () ->

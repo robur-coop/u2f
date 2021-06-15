@@ -17,7 +17,7 @@ type error = [
   | `Version_mismatch of string * string
   | `Typ_mismatch of string * string
   | `Challenge_mismatch of string * string
-  | `Key_handle_mismatch of string * string
+  | `Unknown_key_handle of string
   | `Signature_verification of string
 ]
 
@@ -27,15 +27,16 @@ type challenge = string
 
 type key_handle = string
 
-val register_request : t -> challenge * string
+val register_request : ?key_handles:key_handle list -> t -> challenge * string
 
 val register_response : t -> challenge -> string ->
   (Mirage_crypto_ec.P256.Dsa.pub * key_handle * X509.Certificate.t,
    error) result
 
-val authentication_request : t -> key_handle ->
+val authentication_request : t -> key_handle list ->
   challenge * string
 
-val authentication_response : t -> Mirage_crypto_ec.P256.Dsa.pub ->
-  key_handle -> challenge -> string ->
-  (bool * int32, error) result
+val authentication_response : t ->
+  (key_handle * Mirage_crypto_ec.P256.Dsa.pub) list ->
+  challenge -> string ->
+  (key_handle * bool * int32, error) result
