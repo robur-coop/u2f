@@ -2,6 +2,18 @@ open Lwt.Infix
 
 let users = Hashtbl.create 7
 
+let counters = Hashtbl.create 7
+
+let check_counter kh counter =
+  let r =
+    match Hashtbl.find_opt counters kh with
+    | Some counter' -> Int32.unsigned_compare counter counter' > 0
+    | None -> true
+  in
+  if r
+  then Hashtbl.replace counters kh counter;
+  r
+
 let retrieve_form request =
   Dream.body request >|= fun body ->
   let form = Dream__pure.Formats.from_form_urlencoded body in
@@ -105,11 +117,20 @@ let add_routes t =
           let kh_keys = List.map (fun (key, kh, _) -> kh, key) keys in
           let token = List.assoc "token" data in
           match U2f.authentication_response t kh_keys challenge token with
-          | Ok (_key_handle, _user_present, _counter) ->
-            Flash_message.put_flash ""  "Successfully authenticated" req;
-            Dream.put_session "user" user req >>= fun () ->
-            Dream.put_session "authenticated_as" user req >>= fun () ->
-            Dream.redirect req "/"
+          | Ok (key_handle, _user_present, counter) ->
+            if check_counter key_handle counter
+            then begin
+              Flash_message.put_flash ""  "Successfully authenticated" req;
+              Dream.put_session "user" user req >>= fun () ->
+              Dream.put_session "authenticated_as" user req >>= fun () ->
+              Dream.redirect req "/"
+            end else begin
+              Logs.warn (fun m -> m "key handle %S for user %S: counter not strictly increasing! \
+                Got %ld, expected >%ld. U2f device compromised?"
+                key_handle user counter (Hashtbl.find counters key_handle));
+              Flash_message.put_flash "" "Authentication failure: key compromised?" req;
+              Dream.redirect req "/"
+            end
           | Error e ->
             Logs.warn (fun m -> m "error %a" U2f.pp_error e);
             let err = to_string e in
