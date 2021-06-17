@@ -30,6 +30,7 @@ type error = [
   | `Challenge_mismatch of string * string
   | `Unknown_key_handle of string
   | `Signature_verification of string
+  | `Origin_mismatch of string * string
 ]
 
 let pp_error ppf = function
@@ -56,6 +57,9 @@ let pp_error ppf = function
     Format.fprintf ppf "unknown key handle %S" received
   | `Signature_verification msg ->
     Format.fprintf ppf "signature verification failed %s" msg
+  | `Origin_mismatch (expected, received) ->
+    Format.fprintf ppf "origin mismatch, expected %S, received %S"
+      expected received
 
 type challenge = string
 
@@ -292,6 +296,8 @@ let authentication_response (t : t) key_handle_keys challenge data =
       (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
     guard (String.equal challenge client_data.challenge)
       (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
+    guard (String.equal t.application_id client_data.origin)
+      (`Origin_mismatch (t.application_id, client_data.origin)) >>= fun () ->
     verify_auth_sig pubkey t.application_id user_present counter
       client_data_json signature >>= fun () ->
     Ok (sig_resp.keyHandle, user_present, counter)

@@ -19,6 +19,7 @@ type error = [
   | `Challenge_mismatch of string * string
   | `Unknown_key_handle of string
   | `Signature_verification of string
+  | `Origin_mismatch of string * string
 ]
 
 val pp_error : Format.formatter -> error -> unit
