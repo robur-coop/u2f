@@ -138,8 +138,8 @@ let add_routes t =
   ]
 
 
-let setup_app level port host https =
-  let u2f = U2f.create "https://u2f-demo.robur.coop" in
+let setup_app level port host application_id https =
+  let u2f = U2f.create application_id in
   let level = match level with None -> None | Some Logs.Debug -> Some `Debug | Some Info -> Some `Info | Some Warning -> Some `Warning | Some Error -> Some `Error | Some App -> None in
   Dream.initialize_log ?level ();
   Dream.run ~port ~interface:host ~https
@@ -159,12 +159,16 @@ let host =
   let doc = "host" in
   Arg.(value & opt string "0.0.0.0" & info [ "h"; "host" ] ~doc)
 
+let application_id =
+  let doc = "the u2f application id - usually protocol://host(:port)" in
+  Arg.(value & opt string "https://u2f-demo.robur.coop" & info [ "application-id" ] ~doc)
+
 let tls =
   let doc = "tls" in
   Arg.(value & flag & info [ "tls" ] ~doc)
 
 let () =
-  let term = Term.(pure setup_app $ Logs_cli.level () $ port $ host $ tls) in
+  let term = Term.(pure setup_app $ Logs_cli.level () $ port $ host $ application_id $ tls) in
   let info = Term.info "U2f app" ~doc:"U2f app" ~man:[] in
   match Term.eval (term, info) with
   | `Ok () -> exit 0
