@@ -300,5 +300,5 @@ let authentication_response (t : t) key_handle_keys challenge data =
       (`Origin_mismatch (t.application_id, client_data.origin)) >>= fun () ->
     verify_auth_sig pubkey t.application_id user_present counter
       client_data_json signature >>= fun () ->
-    Ok (sig_resp.keyHandle, user_present, counter)
+    Ok ((sig_resp.keyHandle, pubkey), user_present, counter)
 

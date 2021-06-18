@@ -40,4 +40,4 @@ val authentication_request : t -> key_handle list ->
 val authentication_response : t ->
   (key_handle * Mirage_crypto_ec.P256.Dsa.pub) list ->
   challenge -> string ->
-  (key_handle * bool * int32, error) result
+  ((key_handle * Mirage_crypto_ec.P256.Dsa.pub) * bool * int32, error) result

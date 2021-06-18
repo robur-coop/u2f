@@ -2,16 +2,24 @@ open Lwt.Infix
 
 let users = Hashtbl.create 7
 
-let counters = Hashtbl.create 7
+module KhPubHashtbl = Hashtbl.Make(struct
+    type t = U2f.key_handle * Mirage_crypto_ec.P256.Dsa.pub
+    let cs_of_pub = Mirage_crypto_ec.P256.Dsa.pub_to_cstruct
+    let equal (kh, pub) (kh', pub') =
+      String.equal kh kh' && Cstruct.equal (cs_of_pub pub) (cs_of_pub pub')
+    let hash (kh, pub) = Hashtbl.hash (kh, Cstruct.to_string (cs_of_pub pub ))
+  end)
 
-let check_counter kh counter =
+let counters = KhPubHashtbl.create 7
+
+let check_counter kh_pub counter =
   let r =
-    match Hashtbl.find_opt counters kh with
+    match KhPubHashtbl.find_opt counters kh_pub with
     | Some counter' -> Int32.unsigned_compare counter counter' > 0
     | None -> true
   in
   if r
-  then Hashtbl.replace counters kh counter;
+  then KhPubHashtbl.replace counters kh_pub counter;
   r
 
 let retrieve_form request =
@@ -117,8 +125,8 @@ let add_routes t =
           let kh_keys = List.map (fun (key, kh, _) -> kh, key) keys in
           let token = List.assoc "token" data in
           match U2f.authentication_response t kh_keys challenge token with
-          | Ok (key_handle, _user_present, counter) ->
-            if check_counter key_handle counter
+          | Ok (key_handle_pubkey, _user_present, counter) ->
+            if check_counter key_handle_pubkey counter
             then begin
               Flash_message.put_flash ""  "Successfully authenticated" req;
               Dream.put_session "user" user req >>= fun () ->
@@ -127,7 +135,7 @@ let add_routes t =
             end else begin
               Logs.warn (fun m -> m "key handle %S for user %S: counter not strictly increasing! \
                 Got %ld, expected >%ld. U2f device compromised?"
-                key_handle user counter (Hashtbl.find counters key_handle));
+                (fst key_handle_pubkey) user counter (KhPubHashtbl.find counters key_handle_pubkey));
               Flash_message.put_flash "" "Authentication failure: key compromised?" req;
               Dream.redirect req "/"
             end
