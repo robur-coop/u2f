@@ -282,23 +282,28 @@ let authentication_response (t : t) key_handle_keys challenge data =
     u2f_authentication_response_of_yojson data >>= fun sig_resp ->
   lift_err (fun p -> `Protocol p)
     (error_code_of_int sig_resp.errorCode) >>= fun () ->
-  match List.assoc_opt sig_resp.keyHandle key_handle_keys with
-  | None -> Error (`Unknown_key_handle sig_resp.keyHandle)
-  | Some pubkey ->
-    b64_dec "clientData" sig_resp.clientData >>= fun client_data_json ->
-    b64_dec "signatureData" sig_resp.signatureData >>= fun sigdata ->
-    lift_err
-      (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
-      (decode_sigdata sigdata) >>= fun (user_present, counter, signature) ->
-    of_json "clientData"
-      clientData_of_yojson client_data_json >>= fun client_data ->
-    guard (res_typ client_data.typ = Ok `Sign)
-      (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
-    guard (String.equal challenge client_data.challenge)
-      (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
-    guard (String.equal t.application_id client_data.origin)
-      (`Origin_mismatch (t.application_id, client_data.origin)) >>= fun () ->
-    verify_auth_sig pubkey t.application_id user_present counter
-      client_data_json signature >>= fun () ->
-    Ok ((sig_resp.keyHandle, pubkey), user_present, counter)
+  b64_dec "clientData" sig_resp.clientData >>= fun client_data_json ->
+  b64_dec "signatureData" sig_resp.signatureData >>= fun sigdata ->
+  lift_err
+    (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
+    (decode_sigdata sigdata) >>= fun (user_present, counter, signature) ->
+  of_json "clientData"
+    clientData_of_yojson client_data_json >>= fun client_data ->
+  guard (res_typ client_data.typ = Ok `Sign)
+    (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
+  guard (String.equal challenge client_data.challenge)
+    (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
+  guard (String.equal t.application_id client_data.origin)
+    (`Origin_mismatch (t.application_id, client_data.origin)) >>= fun () ->
+  List.fold_left (fun acc (_, pubkey) ->
+    match acc with
+    | Ok key -> Ok key
+    | Error _ ->
+      verify_auth_sig pubkey t.application_id user_present counter
+        client_data_json signature >>= fun () ->
+      Ok pubkey)
+   (Error (`Unknown_key_handle sig_resp.keyHandle))
+   (List.filter (fun (kh, _) -> String.equal kh sig_resp.keyHandle) key_handle_keys)
+  >>= fun pubkey ->
+  Ok ((sig_resp.keyHandle, pubkey), user_present, counter)
 
