@@ -16,7 +16,7 @@ running at [u2f-demo.robur.coop](https://u2f-demo.robur.coop).
 
 ## Documentation
 
-[API documentation](https://robur.github.io/u2f/doc) is available online.
+[API documentation](https://roburio.github.io/u2f/doc) is available online.
 
 ## Installation
 

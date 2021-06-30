@@ -2,7 +2,7 @@ opam-version: "2.0"
 homepage: "https://github.com/roburio/u2f"
 dev-repo: "git+https://github.com/roburio/u2f.git"
 bug-reports: "https://github.com/roburio/u2f/issues"
-doc: "https://robur.github.io/u2f/doc"
+doc: "https://roburio.github.io/u2f/doc"
 maintainer: [ "team@robur.coop" ]
 authors: [ "Reynir Björnsson <reynir@reynir.dk>" "Hannes Mehnert <hannes@mehnert.org>" ]
 license: "BSD-2-Clause"
