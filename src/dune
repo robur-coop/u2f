@@ -2,4 +2,4 @@
  (name u2f)
  (preprocess
   (pps ppx_deriving_yojson))
- (libraries yojson mirage-crypto-ec x509 base64))
+ (libraries mirage-crypto-rng yojson mirage-crypto-ec x509 base64))

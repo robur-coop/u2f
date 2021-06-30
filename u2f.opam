@@ -14,6 +14,8 @@ build: [
 ]
 
 depends: [
+  "ocaml" {>= "4.08.0"}
+  "dune" {>= "2.7"}
   "dream" {dev}
   "ppx_blob" {dev}
   "cmdliner" {dev}
@@ -22,8 +24,9 @@ depends: [
   "yojson"
   "ppx_deriving_yojson"
   "mirage-crypto-ec"
-  "x509"
-  "base64"
+  "mirage-crypto-rng"
+  "x509" {>= "0.13.0"}
+  "base64" {>= "3.1.0"}
 ]
 
 synopsis: "Universal Second Factor (U2F) implementation in OCaml"
