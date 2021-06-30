@@ -2,9 +2,9 @@ opam-version: "2.0"
 homepage: "https://github.com/roburio/u2f"
 dev-repo: "git+https://github.com/roburio/u2f.git"
 bug-reports: "https://github.com/roburio/u2f/issues"
-maintainer: [ "robur team" ]
-authors: [ "robur team" ]
-license: "undecided"
+maintainer: [ "team@robur.coop" ]
+authors: [ "Reynir Björnsson <reynir@reynir.dk>" "Hannes Mehnert <hannes@mehnert.org>" ]
+license: "BSD-2-Clause"
 
 build: [
   ["dune" "subst"] {dev}
