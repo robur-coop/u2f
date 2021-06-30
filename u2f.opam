@@ -2,9 +2,10 @@ opam-version: "2.0"
 homepage: "https://github.com/roburio/u2f"
 dev-repo: "git+https://github.com/roburio/u2f.git"
 bug-reports: "https://github.com/roburio/u2f/issues"
-maintainer: [ "robur team" ]
-authors: [ "robur team" ]
-license: "undecided"
+doc: "https://robur.github.io/u2f/doc"
+maintainer: [ "team@robur.coop" ]
+authors: [ "Reynir Björnsson <reynir@reynir.dk>" "Hannes Mehnert <hannes@mehnert.org>" ]
+license: "BSD-2-Clause"
 
 build: [
   ["dune" "subst"] {dev}
@@ -13,6 +14,8 @@ build: [
 ]
 
 depends: [
+  "ocaml" {>= "4.08.0"}
+  "dune" {>= "2.7"}
   "dream" {dev}
   "ppx_blob" {dev}
   "cmdliner" {dev}
@@ -21,8 +24,14 @@ depends: [
   "yojson"
   "ppx_deriving_yojson"
   "mirage-crypto-ec"
-  "x509"
-  "base64"
+  "mirage-crypto-rng"
+  "x509" {>= "0.13.0"}
+  "base64" {>= "3.1.0"}
 ]
 
-synopsis: "U2F implementation in OCaml"
+synopsis: "Universal Second Factor (U2F) implementation in OCaml"
+description: """
+A server-side implementation of the two-factor authentication standard
+Universal Second Factor (U2F). With special (USB, NFC) devices, a
+challenge-response authentication using public key cryptography is done.
+"""
