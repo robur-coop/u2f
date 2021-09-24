@@ -147,7 +147,7 @@ let seq_len cs =
   let first_len = Cstruct.get_uint8 cs 1 in
   if first_len > 0x80 then
     let len_bytes = first_len - 0x80 in
-    guard (Cstruct.len cs > len_bytes + 2)
+    guard (Cstruct.length cs > len_bytes + 2)
       (`Msg "Certificate with too few data") >>= fun () ->
     let rec read_more acc off =
       if off = len_bytes then
@@ -162,17 +162,17 @@ let seq_len cs =
 
 let decode_reg_data data =
   let cs = Cstruct.of_string data in
-  guard (Cstruct.len cs >= 67)
+  guard (Cstruct.length cs >= 67)
     (`Msg "registration data too small (< 67)") >>= fun () ->
   guard (Cstruct.get_uint8 cs 0 = 0x05)
     (`Msg "registration data first byte must be 0x05") >>= fun () ->
   let pubkey, rest = Cstruct.(split (shift cs 1) 65) in
   let kh_len = Cstruct.get_uint8 rest 0 in
-  guard (Cstruct.len rest > kh_len)
+  guard (Cstruct.length rest > kh_len)
     (`Msg ("registration data too small (< kh_len)")) >>= fun () ->
   let kh, rest = Cstruct.(split (shift rest 1) kh_len) in
   seq_len rest >>= fun clen ->
-  guard (Cstruct.len rest > clen)
+  guard (Cstruct.length rest > clen)
     (`Msg ("registration data too small (< clen)")) >>= fun () ->
   let cert_data, signature = Cstruct.split rest clen in
   X509.Certificate.decode_der cert_data >>= fun cert ->
@@ -270,7 +270,7 @@ type u2f_authentication_response = {
 
 let decode_sigdata data =
   let cs = Cstruct.of_string data in
-  guard (Cstruct.len cs > 5)
+  guard (Cstruct.length cs > 5)
     (`Msg "sigData too small") >>= fun () ->
   let user_presence = Cstruct.get_uint8 cs 0 = 1 in
   let counter = Cstruct.BE.get_uint32 cs 1 in
