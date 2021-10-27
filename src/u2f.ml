@@ -67,10 +67,8 @@ type key_handle = string
 
 let b64_enc = Base64.(encode_string ~pad:false ~alphabet:uri_safe_alphabet)
 
-let lift_err f = function Ok _ as a -> a | Error x -> Error (f x)
-
 let b64_dec thing s =
-  lift_err
+  Result.map_error
     (function `Msg m -> `Base64_decoding (thing, m, s))
     Base64.(decode ~pad:false ~alphabet:uri_safe_alphabet s)
 
@@ -135,19 +133,23 @@ type u2f_register_response = {
   version : string ;
 } [@@deriving yojson]
 
-let (>>=) v f = match v with Ok v -> f v | Error _ as e -> e
+let ( let* ) = Result.bind
 
 let guard p e = if p then Ok () else Error e
 
 (* manually extract the certificate length to split <cert> <signature> *)
 let seq_len cs =
-  guard (Cstruct.get_uint8 cs 0 = 0x30)
-    (`Msg "Certificate is not an ASN.1 sequence") >>= fun () ->
+  let* () =
+    guard (Cstruct.get_uint8 cs 0 = 0x30)
+      (`Msg "Certificate is not an ASN.1 sequence")
+  in
   let first_len = Cstruct.get_uint8 cs 1 in
   if first_len > 0x80 then
     let len_bytes = first_len - 0x80 in
-    guard (Cstruct.length cs > len_bytes + 2)
-      (`Msg "Certificate with too few data") >>= fun () ->
+    let* () =
+      guard (Cstruct.length cs > len_bytes + 2)
+        (`Msg "Certificate with too few data")
+    in
     let rec read_more acc off =
       if off = len_bytes then
         Ok (acc + 2 + len_bytes)
@@ -161,20 +163,28 @@ let seq_len cs =
 
 let decode_reg_data data =
   let cs = Cstruct.of_string data in
-  guard (Cstruct.length cs >= 67)
-    (`Msg "registration data too small (< 67)") >>= fun () ->
-  guard (Cstruct.get_uint8 cs 0 = 0x05)
-    (`Msg "registration data first byte must be 0x05") >>= fun () ->
+  let* () =
+    guard (Cstruct.length cs >= 67)
+      (`Msg "registration data too small (< 67)")
+  in
+  let* () =
+    guard (Cstruct.get_uint8 cs 0 = 0x05)
+      (`Msg "registration data first byte must be 0x05")
+  in
   let pubkey, rest = Cstruct.(split (shift cs 1) 65) in
   let kh_len = Cstruct.get_uint8 rest 0 in
-  guard (Cstruct.length rest > kh_len)
-    (`Msg ("registration data too small (< kh_len)")) >>= fun () ->
+  let* () =
+    guard (Cstruct.length rest > kh_len)
+      (`Msg ("registration data too small (< kh_len)"))
+  in
   let kh, rest = Cstruct.(split (shift rest 1) kh_len) in
-  seq_len rest >>= fun clen ->
-  guard (Cstruct.length rest > clen)
-    (`Msg ("registration data too small (< clen)")) >>= fun () ->
+  let* clen = seq_len rest in
+  let* () =
+    guard (Cstruct.length rest > clen)
+      (`Msg ("registration data too small (< clen)"))
+  in
   let cert_data, signature = Cstruct.split rest clen in
-  X509.Certificate.decode_der cert_data >>= fun cert ->
+  let* cert = X509.Certificate.decode_der cert_data in
   match Mirage_crypto_ec.P256.Dsa.pub_of_cstruct pubkey with
   | Ok key -> Ok (key, kh, cert, signature)
   | Error err ->
@@ -213,35 +223,53 @@ let verify_auth_sig key app presence counter client_data signature =
   verify_sig (`P256 key) ~signature data
 
 let of_json_or_err thing p json =
-  lift_err
+  Result.map_error
     (fun msg -> `Json_decoding (thing, msg, Yojson.Safe.to_string json))
     (p json)
 
 let of_json thing p s =
-  (try Ok (Yojson.Safe.from_string s)
-   with Yojson.Json_error msg ->
-     Error (`Json_decoding (thing, msg, s))) >>=
-  of_json_or_err thing p
+  let* json =
+    try Ok (Yojson.Safe.from_string s)
+    with Yojson.Json_error msg ->
+      Error (`Json_decoding (thing, msg, s))
+  in
+  of_json_or_err thing p json
 
 let register_response (t : t) challenge data =
-  of_json "RegisterResponse"
-    u2f_register_response_of_yojson data >>= fun reg_resp ->
-  lift_err (fun p -> `Protocol p)
-    (error_code_of_int reg_resp.errorCode) >>= fun () ->
-  guard (String.equal t.version reg_resp.version)
-    (`Version_mismatch (t.version, reg_resp.version)) >>= fun () ->
-  b64_dec "clientData" reg_resp.clientData >>= fun client_data_json ->
-  b64_dec "registrationData" reg_resp.registrationData >>= fun reg_data ->
-  lift_err
-    (function `Msg m -> `Binary_decoding ("registrationData", m, reg_data))
-    (decode_reg_data reg_data) >>= fun (key, key_handle, certificate, signature) ->
-  of_json "clientData" clientData_of_yojson client_data_json >>= fun client_data ->
-  guard (res_typ client_data.typ = Ok `Register)
-    (`Typ_mismatch (res_typ_to_string `Register, client_data.typ)) >>= fun () ->
-  guard (String.equal challenge client_data.challenge)
-    (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
-  verify_reg_sig certificate t.application_id client_data_json
-    key_handle key signature >>= fun () ->
+  let* reg_resp =
+    of_json "RegisterResponse" u2f_register_response_of_yojson data
+  in
+  let* () =
+    Result.map_error
+      (fun p -> `Protocol p)
+      (error_code_of_int reg_resp.errorCode)
+  in
+  let* () =
+    guard (String.equal t.version reg_resp.version)
+      (`Version_mismatch (t.version, reg_resp.version))
+  in
+  let* client_data_json = b64_dec "clientData" reg_resp.clientData in
+  let* reg_data = b64_dec "registrationData" reg_resp.registrationData in
+  let* key, key_handle, certificate, signature =
+    Result.map_error
+      (function `Msg m -> `Binary_decoding ("registrationData", m, reg_data))
+      (decode_reg_data reg_data)
+  in
+  let* client_data =
+    of_json "clientData" clientData_of_yojson client_data_json
+  in
+  let* () =
+    guard (res_typ client_data.typ = Ok `Register)
+      (`Typ_mismatch (res_typ_to_string `Register, client_data.typ))
+  in
+  let* () =
+    guard (String.equal challenge client_data.challenge)
+      (`Challenge_mismatch (challenge, client_data.challenge))
+  in
+  let* () =
+    verify_reg_sig certificate t.application_id client_data_json
+      key_handle key signature
+  in
   Ok (key, b64_enc (Cstruct.to_string key_handle), certificate)
 
 type u2f_authentication_request = {
@@ -269,40 +297,56 @@ type u2f_authentication_response = {
 
 let decode_sigdata data =
   let cs = Cstruct.of_string data in
-  guard (Cstruct.length cs > 5)
-    (`Msg "sigData too small") >>= fun () ->
+  let* () = guard (Cstruct.length cs > 5) (`Msg "sigData too small") in
   let user_presence = Cstruct.get_uint8 cs 0 = 1 in
   let counter = Cstruct.BE.get_uint32 cs 1 in
   let signature = Cstruct.shift cs 5 in
   Ok (user_presence, counter, signature)
 
 let authentication_response (t : t) key_handle_keys challenge data =
-  of_json "AuthenticationResponse"
-    u2f_authentication_response_of_yojson data >>= fun sig_resp ->
-  lift_err (fun p -> `Protocol p)
-    (error_code_of_int sig_resp.errorCode) >>= fun () ->
-  b64_dec "clientData" sig_resp.clientData >>= fun client_data_json ->
-  b64_dec "signatureData" sig_resp.signatureData >>= fun sigdata ->
-  lift_err
-    (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
-    (decode_sigdata sigdata) >>= fun (user_present, counter, signature) ->
-  of_json "clientData"
-    clientData_of_yojson client_data_json >>= fun client_data ->
-  guard (res_typ client_data.typ = Ok `Sign)
-    (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ)) >>= fun () ->
-  guard (String.equal challenge client_data.challenge)
-    (`Challenge_mismatch (challenge, client_data.challenge)) >>= fun () ->
-  guard (String.equal t.application_id client_data.origin)
-    (`Origin_mismatch (t.application_id, client_data.origin)) >>= fun () ->
-  List.fold_left (fun acc (_, pubkey) ->
-    match acc with
-    | Ok key -> Ok key
-    | Error _ ->
-      verify_auth_sig pubkey t.application_id user_present counter
-        client_data_json signature >>= fun () ->
-      Ok pubkey)
-   (Error (`Unknown_key_handle sig_resp.keyHandle))
-   (List.filter (fun (kh, _) -> String.equal kh sig_resp.keyHandle) key_handle_keys)
-  >>= fun pubkey ->
+  let* sig_resp =
+    of_json "AuthenticationResponse" u2f_authentication_response_of_yojson data
+  in
+  let* () =
+    Result.map_error
+      (fun p -> `Protocol p)
+      (error_code_of_int sig_resp.errorCode)
+  in
+  let* client_data_json = b64_dec "clientData" sig_resp.clientData in
+  let* sigdata = b64_dec "signatureData" sig_resp.signatureData in
+  let* user_present, counter, signature =
+    Result.map_error
+      (function `Msg m -> `Binary_decoding ("signatureData", m, sigdata))
+      (decode_sigdata sigdata)
+  in
+  let* client_data =
+    of_json "clientData" clientData_of_yojson client_data_json
+  in
+  let* () =
+    guard (res_typ client_data.typ = Ok `Sign)
+      (`Typ_mismatch (res_typ_to_string `Sign, client_data.typ))
+  in
+  let* () =
+    guard (String.equal challenge client_data.challenge)
+      (`Challenge_mismatch (challenge, client_data.challenge))
+  in
+  let* () =
+    guard (String.equal t.application_id client_data.origin)
+      (`Origin_mismatch (t.application_id, client_data.origin))
+  in
+  let* pubkey =
+    List.fold_left (fun acc (_, pubkey) ->
+        match acc with
+        | Ok key -> Ok key
+        | Error _ ->
+          let* () =
+            verify_auth_sig pubkey t.application_id user_present counter
+              client_data_json signature
+          in
+          Ok pubkey)
+      (Error (`Unknown_key_handle sig_resp.keyHandle))
+      (List.filter (fun (kh, _) ->
+           String.equal kh sig_resp.keyHandle) key_handle_keys)
+  in
   Ok ((sig_resp.keyHandle, pubkey), user_present, counter)
 
