@@ -141,7 +141,6 @@ let guard p e = if p then Ok () else Error e
 
 (* manually extract the certificate length to split <cert> <signature> *)
 let seq_len cs =
-  let open Rresult.R.Infix in
   guard (Cstruct.get_uint8 cs 0 = 0x30)
     (`Msg "Certificate is not an ASN.1 sequence") >>= fun () ->
   let first_len = Cstruct.get_uint8 cs 1 in
