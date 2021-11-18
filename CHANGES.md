@@ -1,4 +1,4 @@
-# v0.1.2 (2021-11-18)
+## v0.1.2 (2021-11-18)
 
 * Remove unused reference to Rresult
 
