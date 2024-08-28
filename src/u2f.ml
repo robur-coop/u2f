@@ -194,35 +194,39 @@ let decode_reg_data data =
     Error (`Msg err)
 
 let verify_sig pub ~signature data =
-  match X509.Public_key.verify `SHA256 ~signature pub (`Message data) with
+  match X509.Public_key.verify `SHA256 ~signature pub data with
   | Error `Msg m -> Error (`Signature_verification m)
   | Ok () -> Ok ()
 
 let verify_reg_sig cert app client_data kh key signature =
   let h s = Digestif.SHA256.(to_raw_string (digest_string s)) in
-  let data =
-    String.concat "" [
-      String.make 1 '\000' ;
-      h app ;
-      h client_data ;
-      kh ;
-      Mirage_crypto_ec.P256.Dsa.pub_to_octets key
-    ]
+  let digest =
+    Digestif.SHA256.digestv_string
+      [
+        "\000" ;
+        h app ;
+        h client_data ;
+        kh ;
+        Mirage_crypto_ec.P256.Dsa.pub_to_octets key
+      ]
+    |> Digestif.SHA256.to_raw_string
   in
-  verify_sig (X509.Certificate.public_key cert) ~signature data
+  let pub = X509.Certificate.public_key cert in
+  verify_sig pub ~signature (`Digest digest)
 
 let verify_auth_sig key app presence counter client_data signature =
-  let data =
+  let digest =
     let h s = Digestif.SHA256.(to_raw_string (digest_string s)) in
-    let p_c =
-      let b = Bytes.create 5 in
-      if presence then Bytes.set_uint8 b 0 1;
-      Bytes.set_int32_be b 1 counter;
-      Bytes.unsafe_to_string b
-    in
-    String.concat "" [ h app ; p_c ; h client_data ]
+    Digestif.SHA256.digesti_string (fun digest ->
+      digest (h app);
+      digest (if presence then "\001" else "\000");
+      digest (let b = Bytes.create 4 in
+        Bytes.set_int32_be b 0 counter;
+        Bytes.unsafe_to_string b);
+      digest (h client_data))
+    |> Digestif.SHA256.to_raw_string
   in
-  verify_sig (`P256 key) ~signature data
+  verify_sig (`P256 key) ~signature (`Digest digest)
 
 let of_json_or_err thing p json =
   Result.map_error
