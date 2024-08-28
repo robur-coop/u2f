@@ -43,7 +43,7 @@ let pp_error ppf = function
       name err value
   | `Binary_decoding (name, err, value) ->
     Format.fprintf ppf "binary decoding of %s failed with %S (input %a)"
-      name err Cstruct.hexdump_pp (Cstruct.of_string value)
+      name err (Ohex.pp_hexdump ()) value
   | `Version_mismatch (expected, received) ->
     Format.fprintf ppf "version mismatch, expected %S, received %S"
       expected received
@@ -89,8 +89,7 @@ type u2f_register_request = {
 } [@@deriving yojson]
 
 let challenge () =
-  let random = Cstruct.to_string (Mirage_crypto_rng.generate 32) in
-  b64_enc random
+  b64_enc (Mirage_crypto_rng.generate 32)
 
 let register_request ?(key_handles = []) { version ; application_id } =
   let challenge = challenge () in
@@ -140,21 +139,21 @@ let guard p e = if p then Ok () else Error e
 (* manually extract the certificate length to split <cert> <signature> *)
 let seq_len cs =
   let* () =
-    guard (Cstruct.get_uint8 cs 0 = 0x30)
+    guard (String.get_uint8 cs 0 = 0x30)
       (`Msg "Certificate is not an ASN.1 sequence")
   in
-  let first_len = Cstruct.get_uint8 cs 1 in
+  let first_len = String.get_uint8 cs 1 in
   if first_len > 0x80 then
     let len_bytes = first_len - 0x80 in
     let* () =
-      guard (Cstruct.length cs > len_bytes + 2)
+      guard (String.length cs > len_bytes + 2)
         (`Msg "Certificate with too few data")
     in
     let rec read_more acc off =
       if off = len_bytes then
         Ok (acc + 2 + len_bytes)
       else
-        let v = acc * 256 + Cstruct.get_uint8 cs (off + 2) in
+        let v = acc * 256 + String.get_uint8 cs (off + 2) in
         read_more v (off + 1)
     in
     read_more 0 0
@@ -162,30 +161,33 @@ let seq_len cs =
     Ok (first_len + 2)
 
 let decode_reg_data data =
-  let cs = Cstruct.of_string data in
   let* () =
-    guard (Cstruct.length cs >= 67)
+    guard (String.length data >= 67)
       (`Msg "registration data too small (< 67)")
   in
   let* () =
-    guard (Cstruct.get_uint8 cs 0 = 0x05)
+    guard (String.get_uint8 data 0 = 0x05)
       (`Msg "registration data first byte must be 0x05")
   in
-  let pubkey, rest = Cstruct.(split (shift cs 1) 65) in
-  let kh_len = Cstruct.get_uint8 rest 0 in
+  let pubkey = String.sub data 1 65 in
+  let kh_len = String.get_uint8 data 66 in
   let* () =
-    guard (Cstruct.length rest > kh_len)
+    guard (String.length data - 66 > kh_len)
       (`Msg ("registration data too small (< kh_len)"))
   in
-  let kh, rest = Cstruct.(split (shift rest 1) kh_len) in
+  let kh = String.sub data 67 kh_len in
+  let rest = String.sub data (67 + kh_len) (String.length data - 67 - kh_len) in
   let* clen = seq_len rest in
   let* () =
-    guard (Cstruct.length rest > clen)
+    guard (String.length rest > clen)
       (`Msg ("registration data too small (< clen)"))
   in
-  let cert_data, signature = Cstruct.split rest clen in
+  let cert_data, signature =
+    String.sub rest 0 clen,
+    String.sub rest clen (String.length rest - clen)
+  in
   let* cert = X509.Certificate.decode_der cert_data in
-  match Mirage_crypto_ec.P256.Dsa.pub_of_cstruct pubkey with
+  match Mirage_crypto_ec.P256.Dsa.pub_of_octets pubkey with
   | Ok key -> Ok (key, kh, cert, signature)
   | Error err ->
     let err = Format.asprintf "%a" Mirage_crypto_ec.pp_error err in
@@ -197,28 +199,28 @@ let verify_sig pub ~signature data =
   | Ok () -> Ok ()
 
 let verify_reg_sig cert app client_data kh key signature =
-  let h s = Mirage_crypto.Hash.SHA256.digest (Cstruct.of_string s) in
+  let h s = Digestif.SHA256.(to_raw_string (digest_string s)) in
   let data =
-    Cstruct.concat [
-      Cstruct.create 1 ;
+    String.concat "" [
+      String.make 1 '\000' ;
       h app ;
       h client_data ;
       kh ;
-      Mirage_crypto_ec.P256.Dsa.pub_to_cstruct key
+      Mirage_crypto_ec.P256.Dsa.pub_to_octets key
     ]
   in
   verify_sig (X509.Certificate.public_key cert) ~signature data
 
 let verify_auth_sig key app presence counter client_data signature =
   let data =
-    let h s = Mirage_crypto.Hash.SHA256.digest (Cstruct.of_string s) in
+    let h s = Digestif.SHA256.(to_raw_string (digest_string s)) in
     let p_c =
-      let b = Cstruct.create 5 in
-      if presence then Cstruct.set_uint8 b 0 1;
-      Cstruct.BE.set_uint32 b 1 counter;
-      b
+      let b = Bytes.create 5 in
+      if presence then Bytes.set_uint8 b 0 1;
+      Bytes.set_int32_be b 1 counter;
+      Bytes.unsafe_to_string b
     in
-    Cstruct.concat [ h app ; p_c ; h client_data ]
+    String.concat "" [ h app ; p_c ; h client_data ]
   in
   verify_sig (`P256 key) ~signature data
 
@@ -270,7 +272,7 @@ let register_response (t : t) challenge data =
     verify_reg_sig certificate t.application_id client_data_json
       key_handle key signature
   in
-  Ok (key, b64_enc (Cstruct.to_string key_handle), certificate)
+  Ok (key, b64_enc key_handle, certificate)
 
 type u2f_authentication_request = {
   appId : string ;
@@ -296,11 +298,10 @@ type u2f_authentication_response = {
 } [@@deriving yojson]
 
 let decode_sigdata data =
-  let cs = Cstruct.of_string data in
-  let* () = guard (Cstruct.length cs > 5) (`Msg "sigData too small") in
-  let user_presence = Cstruct.get_uint8 cs 0 = 1 in
-  let counter = Cstruct.BE.get_uint32 cs 1 in
-  let signature = Cstruct.shift cs 5 in
+  let* () = guard (String.length data > 5) (`Msg "sigData too small") in
+  let user_presence = String.get_uint8 data 0 = 1 in
+  let counter = String.get_int32_be data 1 in
+  let signature = String.sub data 5 (String.length data - 5) in
   Ok (user_presence, counter, signature)
 
 let authentication_response (t : t) key_handle_keys challenge data =
