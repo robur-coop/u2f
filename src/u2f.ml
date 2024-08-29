@@ -217,13 +217,15 @@ let verify_reg_sig cert app client_data kh key signature =
 let verify_auth_sig key app presence counter client_data signature =
   let digest =
     let h s = Digestif.SHA256.(to_raw_string (digest_string s)) in
-    Digestif.SHA256.digesti_string (fun digest ->
-      digest (h app);
-      digest (if presence then "\001" else "\000");
-      digest (let b = Bytes.create 4 in
-        Bytes.set_int32_be b 0 counter;
-        Bytes.unsafe_to_string b);
-      digest (h client_data))
+    Digestif.SHA256.digestv_string
+      [
+        h app;
+        if presence then "\001" else "\000";
+        (let b = Bytes.create 4 in
+         Bytes.set_int32_be b 0 counter;
+         Bytes.unsafe_to_string b);
+        h client_data;
+      ]
     |> Digestif.SHA256.to_raw_string
   in
   verify_sig (`P256 key) ~signature (`Digest digest)
