@@ -4,10 +4,10 @@ let users = Hashtbl.create 7
 
 module KhPubHashtbl = Hashtbl.Make(struct
     type t = U2f.key_handle * Mirage_crypto_ec.P256.Dsa.pub
-    let cs_of_pub = Mirage_crypto_ec.P256.Dsa.pub_to_cstruct
+    let str_of_pub = Mirage_crypto_ec.P256.Dsa.pub_to_octets
     let equal (kh, pub) (kh', pub') =
-      String.equal kh kh' && Cstruct.equal (cs_of_pub pub) (cs_of_pub pub')
-    let hash (kh, pub) = Hashtbl.hash (kh, Cstruct.to_string (cs_of_pub pub ))
+      String.equal kh kh' && String.equal (str_of_pub pub) (str_of_pub pub')
+    let hash (kh, pub) = Hashtbl.hash (kh, str_of_pub pub )
   end)
 
 let counters = KhPubHashtbl.create 7
@@ -23,25 +23,30 @@ let check_counter kh_pub counter =
   r
 
 let retrieve_form request =
-  Dream.body request >|= fun body ->
-  let form = Dream__pure.Formats.from_form_urlencoded body in
-  List.stable_sort (fun (key, _) (key', _) -> String.compare key key') form
+  (* TODO: CSRF? *)
+  Dream.form ~csrf:false request >|= fun form ->
+  match form with
+  | `Ok form ->
+    List.stable_sort (fun (key, _) (key', _) -> String.compare key key') form
+  | _ ->
+    (* FIXME *)
+    failwith "bad form"
 
 let to_string err = Format.asprintf "%a" U2f.pp_error err
 
 let add_routes t =
   let main req =
-    let authenticated_as = Dream.session "authenticated_as" req in
+    let authenticated_as = Dream.session_field req "authenticated_as" in
     let flash = Flash_message.get_flash req |> List.map snd in
     Dream.html (Template.overview flash authenticated_as users)
   in
 
   let register req =
     let user =
-      match Dream.session "authenticated_as" req with
+      match Dream.session_field req "authenticated_as" with
       | None ->
         Base64.(encode_string ~pad:false ~alphabet:uri_safe_alphabet
-          (Cstruct.to_string (Mirage_crypto_rng.generate 8)))
+          (Mirage_crypto_rng.generate 8))
       | Some username -> username
     in
     let key_handles = match Hashtbl.find_opt users user with
@@ -49,7 +54,7 @@ let add_routes t =
       | Some keys -> List.map (fun (_, kh, _) -> kh) keys
     in
     let challenge, rr = U2f.register_request ~key_handles t in
-    Dream.put_session "challenge" challenge req >>= fun () ->
+    Dream.set_session_field req "challenge" challenge >>= fun () ->
     Dream.html (Template.register_view rr user)
   in
 
@@ -57,7 +62,7 @@ let add_routes t =
     retrieve_form req >>= fun data ->
     let token = List.assoc "token" data in
     let user = List.assoc "username" data in
-    match Dream.session "challenge" req with
+    match Dream.session_field req "challenge" with
     | None ->
       Logs.warn (fun m -> m "no challenge found");
       Dream.respond ~status:`Bad_Request "Bad request."
@@ -69,7 +74,7 @@ let add_routes t =
         Flash_message.put_flash "" ("Registration failed " ^ err) req;
         Dream.redirect req "/"
       | Ok (key, kh, cert) ->
-        match Dream.session "authenticated_as" req, Hashtbl.find_opt users user with
+        match Dream.session_field req "authenticated_as", Hashtbl.find_opt users user with
         | _, None ->
           Logs.app (fun m -> m "registered %s" user);
           Hashtbl.replace users user [ (key, kh, cert) ];
@@ -94,7 +99,7 @@ let add_routes t =
   in
 
   let authenticate req =
-    let user = Dream.param "user" req in
+    let user = Dream.param req "user" in
     match Hashtbl.find_opt users user with
     | None ->
       Logs.warn (fun m -> m "no user found");
@@ -102,17 +107,17 @@ let add_routes t =
     | Some keys ->
       let khs = List.map (fun (_, kh, _) -> kh) keys in
       let challenge, ar = U2f.authentication_request t khs in
-      Dream.put_session "challenge" challenge req >>= fun () ->
-      Dream.put_session "challenge_user" user req >>= fun () ->
+      Dream.set_session_field req "challenge" challenge >>= fun () ->
+      Dream.set_session_field req "challenge_user" user >>= fun () ->
       Dream.html (Template.authenticate_view ar user)
   in
 
   let authenticate_finish req =
     retrieve_form req >>= fun data ->
-    match Dream.session "challenge_user" req with
+    match Dream.session_field req "challenge_user" with
     | None -> Dream.respond ~status:`Internal_Server_Error "Internal server error."
     | Some user ->
-      match Dream.session "challenge" req with
+      match Dream.session_field req "challenge" with
       | None ->
         Logs.warn (fun m -> m "no challenge found");
         Dream.respond ~status:`Bad_Request "Bad request."
@@ -129,8 +134,8 @@ let add_routes t =
             if check_counter key_handle_pubkey counter
             then begin
               Flash_message.put_flash ""  "Successfully authenticated" req;
-              Dream.put_session "user" user req >>= fun () ->
-              Dream.put_session "authenticated_as" user req >>= fun () ->
+              Dream.set_session_field req "user" user >>= fun () ->
+              Dream.set_session_field req "authenticated_as" user >>= fun () ->
               Dream.redirect req "/"
             end else begin
               Logs.warn (fun m -> m "key handle %S for user %S: counter not strictly increasing! \
@@ -156,7 +161,7 @@ let add_routes t =
       [%blob "u2f-api-1.1.js"]
   in
 
-  Dream.router [
+  [
     Dream.get "/" main;
     Dream.get "/register" register;
     Dream.post "/register_finish" register_finish;
@@ -167,16 +172,15 @@ let add_routes t =
   ]
 
 
-let setup_app level port host application_id https =
+let setup_app level port host application_id tls =
   let u2f = U2f.create application_id in
   let level = match level with None -> None | Some Logs.Debug -> Some `Debug | Some Info -> Some `Info | Some Warning -> Some `Warning | Some Error -> Some `Error | Some App -> None in
   Dream.initialize_log ?level ();
-  Dream.run ~port ~interface:host ~https
+  Dream.run ~port ~interface:host ~tls
   @@ Dream.logger
   @@ Dream.memory_sessions
   @@ Flash_message.flash_messages
-  @@ add_routes u2f
-  @@ Dream.not_found
+  @@ Dream.router (add_routes u2f)
 
 open Cmdliner
 
