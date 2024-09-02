@@ -1,5 +1,11 @@
 ## U2F - Universal Second Factor
 
+### **Deprecation**
+
+In 2022 Google Chrome announced they would deprecate and remove U2F support in their browser. Firefox followed suit and removed U2F support in 2023.
+Please take a look at our [WebAuthn implementation](https://git.robur.coop/robur/webauthn) ([GitHub mirror](https://github.com/robur-coop/webauthn)).
+If you still need U2F please reach out to us with the contact details listed on [https://robur.coop/Contact](https://robur.coop/Contact).
+
 U2F is a
 [FIDO standard](https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/)
 for two-factor authentication using specialized USB or NFC devices, similar
